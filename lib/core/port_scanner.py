@@ -2,57 +2,91 @@
 # @Author  : h0rs3fa11
 # @FileName: port_scanner.py
 # @Software: PyCharm
-import asyncio
+import os
+from multiprocessing import Pool, cpu_count
 import socket
+import asyncio
 
-DONE = object()
-# 异步端口扫描
+
 class PortScanner:
-    def __init__(self, target):
-        self.target = target
+    def __init__(self, ip, start_port, end_port):
+        self.ip = ip
+        self.start_port = start_port
+        self.end_port = end_port
 
-    async def start_master(self, ports, task_queue):
-        for p in ports:
-            # print(f'[master] send {p}')
-            await task_queue.put(p)
-        # print('[master] send DONE')
-        await task_queue.put(DONE)
-
-    async def start_worker(self, task_queue):
-        while True:
-            port = await task_queue.get()
-            if port == DONE:
-                return
-            # print(f'Start conroutine {port}')
+    def run(self):
+        for p in range(self.start_port, self.end_port):
             try:
-                _, writer = await asyncio.open_connection(self.target, port)
-                # TODO: add port to redis
-                # print(f'{port} is open')
-                writer.close()
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.connect((self.ip, p))
+                    print(f'{p} is open')
             except ConnectionRefusedError:
-                # print(f'connection refused from port {port}
                 pass
-            finally:
-                # print(f'Finish scan {port}')
-                task_queue.task_done()
 
-    async def scan(self, port):
-        print(f'Start conroutine {port}')
-        try:
-            _, writer = await asyncio.open_connection(self.target, port)
-            # TODO: add port to redis
-            print(f'{port} is open')
-            writer.close()
-        except ConnectionRefusedError:
-            # print(f'connection refused from port {port}
-            pass
-        finally:
-            print(f'Finish scan {port}')
 
-    def scan_single(self, port):
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.connect((self.target, port))
-                print(f'{port} is open')
-        except ConnectionRefusedError:
-            pass
+class ProcessScan:
+    def __init__(self, ip, start, end):
+        super().__init__()
+        self.ip = ip
+        self.start = start
+        self.end = end
+
+    @staticmethod
+    def do_scan(ip, start, end):
+        for p in range(start, end):
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.connect((ip, p))
+                    print(f'{p} is open')
+            except ConnectionRefusedError:
+                pass
+
+    def run(self):
+        cores = cpu_count()
+        pool = Pool(cores)
+        batches = self.end - self.start + 1
+        per_worker = batches // cores
+        tasks = list(range(self.start, self.end + 1)[::per_worker])
+        if tasks[-1] != self.end:
+            tasks.append(self.end)
+        for i in range(cores):
+            pool.apply_async(ProcessScan.do_scan, (self.ip, tasks[i], tasks[i + 1]))
+        pool.close()
+        pool.join()
+
+
+class AsyPortScan:
+    def __init__(self, ip, start, end, worker):
+        self.ip = ip
+        self.start = start
+        self.end = end
+        self.queue = asyncio.Queue()
+        self.worker = worker
+
+    async def generate_tasks(self):
+        batches = self.end - self.start + 1
+        per_worker = batches // self.worker
+        tasks = list(range(self.start, self.end + 1)[::per_worker])
+        if tasks[1] != self.end:
+            tasks.append(self.end)
+        for i in range(len(tasks) - 1):
+            await self.queue.put((self.ip, tasks[i], tasks[i + 1]))
+
+    async def scan(self, i):
+        while not self.queue.empty():
+            host = await self.queue.get()
+            # print(host)
+            # print(f'scan port range ({host[1]},{host[2] - 1})')
+            for p in range(host[1], host[2]):
+                conn = asyncio.open_connection(host[0], p)
+                try:
+                    _, _ = await asyncio.wait_for(conn, timeout=1)
+                    print(f'{p} is open')
+                except ConnectionRefusedError:
+                    pass
+                except asyncio.exceptions.TimeoutError:
+                    print(f'{host[0]}:{p} timeout')
+                    break
+                # bug here
+                except Exception as e:
+                    print(f'unexpect exception occured, {host[0]}:{p}\n{e}')
