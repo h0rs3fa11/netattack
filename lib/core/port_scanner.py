@@ -4,6 +4,7 @@
 # @Software: PyCharm
 import os
 from multiprocessing import Pool, cpu_count
+from lib.utils.config import Config
 import socket
 import asyncio
 
@@ -19,6 +20,7 @@ class PortScanner:
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                     s.connect((self.ip, p))
+                    Config.redis_store.lpush(self.ip, p)
                     print(f'{p} is open')
             except ConnectionRefusedError:
                 pass
@@ -33,10 +35,12 @@ class ProcessScan:
 
     @staticmethod
     def do_scan(ip, start, end):
+        socket.setdefaulttimeout(5)
         for p in range(start, end):
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                     s.connect((ip, p))
+                    Config.redis_store.lpush(ip, p)
                     print(f'{p} is open')
             except ConnectionRefusedError:
                 pass
@@ -75,12 +79,12 @@ class AsyPortScan:
     async def scan(self, i):
         while not self.queue.empty():
             host = await self.queue.get()
-            # print(host)
-            # print(f'scan port range ({host[1]},{host[2] - 1})')
+            print(f'scan port {host[1]} to {host[2]}')
             for p in range(host[1], host[2]):
                 conn = asyncio.open_connection(host[0], p)
                 try:
-                    _, _ = await asyncio.wait_for(conn, timeout=1)
+                    _, _ = await asyncio.wait_for(conn, timeout=5)
+                    Config.redis_store.lpush(host[0], p)
                     print(f'{p} is open')
                 except ConnectionRefusedError:
                     pass
