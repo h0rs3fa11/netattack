@@ -4,14 +4,16 @@
 # @Software: PyCharm
 from lib.core.port_scanner import AsyPortScan, ProcessScan, PortScanner
 import asyncio
+from lib.core.tcp_flood import TCPFlood
 from lib.utils.tools import async_time_counter, time_counter
 
 WORKERS = 10
 
 def start():
     # processmain()
-    asyncio.run(main())
+    # asyncio.run(main())
     # singlescan()
+    TCPFlood("192.168.220.79", 10).run()
 
 @async_time_counter
 async def main():
